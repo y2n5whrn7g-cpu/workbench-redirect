@@ -70,24 +70,35 @@
   <p class="tip">这个网址是固定的，收藏它就行<br>如果打不开，说明老师的电脑还没开机</p>
 </div>
 <script>
-// 固定入口页：读取最新隧道地址并自动跳转
+// 固定入口页：读取最新隧道地址并自动跳转（双源容错：主源挂了自动换备源）
 // url.txt 由老师电脑开机后自动更新（start_tunnel.sh）
-var urlTxt = 'url.txt?v=' + Date.now();
-fetch(urlTxt, { cache: 'no-store' })
-  .then(function (r) { return r.text(); })
-  .then(function (t) {
-    var u = (t.match(/https:\/\/[^\s]+/) || [''])[0];
-    if (u) {
-      var link = document.getElementById('manual-link');
-      link.href = u;
-      link.style.display = 'inline-block';
-      link.textContent = '进入我的 AI 工作台';
-      location.replace(u);
-    }
-  })
-  .catch(function () {
-    document.querySelector('.loading span').textContent = '加载失败，请刷新重试';
-  });
+// 主源 = Cloudflare Pages（部署快，2026-08-30 加），备源 = 本托管自身 url.txt
+var SOURCES = [
+  'https://workbench-redirect.pages.dev/url.txt?v=' + Date.now(),
+  'url.txt?v=' + Date.now()
+];
+function tryUrl(i) {
+  if (i >= SOURCES.length) {
+    document.querySelector('.loading span').textContent = '连接不上，请稍后刷新重试';
+    return;
+  }
+  fetch(SOURCES[i], { cache: 'no-store' })
+    .then(function (r) { return r.text(); })
+    .then(function (t) {
+      var u = (t.match(/https:\/\/[^\s]+/) || [''])[0];
+      if (u) {
+        var link = document.getElementById('manual-link');
+        link.href = u;
+        link.style.display = 'inline-block';
+        link.textContent = '进入我的 AI 工作台';
+        location.replace(u);
+      } else {
+        tryUrl(i + 1);
+      }
+    })
+    .catch(function () { tryUrl(i + 1); });
+}
+tryUrl(0);
 </script>
 </body>
 </html>
