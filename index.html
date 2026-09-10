@@ -78,7 +78,7 @@
   <p class="desc" id="desc">正在帮你进入工作台，请稍等…</p>
   <div class="loading" id="loading"><div class="spinner"></div><span id="status">正在连接小马…</span></div>
   <button class="btn" id="retry-btn" style="display:none">再试一次</button>
-  <a class="btn ghost" id="manual-link" href="#" style="display:none">还是打不开？点这里直接进入</a>
+  <a class="btn ghost" id="manual-link" href="#" style="display:none">强制打开原地址（可能仍打不开）</a>
   <p class="tip">这个网址是固定的，收藏它就行<br>如果打不开，说明老师的电脑还没开好</p>
 </div>
 <script>
@@ -126,6 +126,9 @@ function setOffline() {
   $('desc').textContent = OFFLINE_TEXT;
   $('status').textContent = '';
   $('retry-btn').style.display = 'inline-block';
+  /* 只在「探活确实失败」之后才露出直连兜底 —— 早先一读到地址就显示，
+     导致隧道明明是死的也摆个「点这里直接进入」，点进去必然是打不开的页。 */
+  if (tunnelUrl) showLink(tunnelUrl);
   clearTimeout(retryTimer);
   retryTimer = setTimeout(function () { start(true); }, RETRY_MS);
 }
@@ -145,7 +148,6 @@ function fetchUrl(i) {
       var u = (t.match(/https:\/\/[^\s]+/) || [''])[0];
       if (u) {
         tunnelUrl = u;
-        showLink(u);
         probeAll(u, 0);
       } else {
         fetchUrl(i + 1);
