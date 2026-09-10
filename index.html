@@ -47,7 +47,7 @@
     animation: spin 0.8s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
-  a.btn {
+  a.btn, button.btn {
     display: inline-block;
     margin-top: 12px;
     padding: 10px 28px;
@@ -55,7 +55,18 @@
     background: linear-gradient(135deg, #a779ff, #55e4ed);
     color: #0a0e1a; font-weight: 700; font-size: 14px;
     text-decoration: none;
+    border: 0;
+    cursor: pointer;
+    font-family: inherit;
     box-shadow: 0 8px 24px rgba(167,121,255,0.35);
+  }
+  a.btn.ghost {
+    background: transparent;
+    color: rgba(176,188,222,0.7);
+    border: 1px solid rgba(255,255,255,0.14);
+    box-shadow: none;
+    font-weight: 500;
+    font-size: 13px;
   }
   .tip { margin-top: 24px; font-size: 12px; color: rgba(170,184,220,0.5); }
 </style>
@@ -64,41 +75,139 @@
 <div class="card">
   <div class="logo">🤖</div>
   <h1>我的 AI 工作台</h1>
-  <p class="desc">正在帮你进入工作台，请稍等…</p>
-  <div class="loading"><div class="spinner"></div><span>正在连接小马…</span></div>
-  <a class="btn" id="manual-link" href="#" style="display:none">打不开就点这里直接进入</a>
-  <p class="tip">这个网址是固定的，收藏它就行<br>如果打不开，说明老师的电脑还没开机</p>
+  <p class="desc" id="desc">正在帮你进入工作台，请稍等…</p>
+  <div class="loading" id="loading"><div class="spinner"></div><span id="status">正在连接小马…</span></div>
+  <button class="btn" id="retry-btn" style="display:none">再试一次</button>
+  <a class="btn ghost" id="manual-link" href="#" style="display:none">还是打不开？点这里直接进入</a>
+  <p class="tip">这个网址是固定的，收藏它就行<br>如果打不开，说明老师的电脑还没开好</p>
 </div>
 <script>
-// 固定入口页：读取最新隧道地址并自动跳转（双源容错：主源挂了自动换备源）
-// url.txt 由老师电脑开机后自动更新（start_tunnel.sh）
-// 主源 = Cloudflare Pages（部署快，2026-08-30 加），备源 = 本托管自身 url.txt
+/*
+  固定入口页 v2（2026-09-10）
+  作用：读取最新隧道地址 → 先探活 → 确认通了才跳转。
+
+  为什么要先探活：
+  隧道（cloudflared quick tunnel）每次重启都会换一个新地址，旧地址立刻失效；
+  而 url.txt 要经 GitHub → Pages 重建，有 1~3 分钟延迟。
+  这个空窗期里，旧版页面会把学员直接丢到 Cloudflare 530 错误页（=「打不开」），
+  页面自己的提示根本来不及显示。所以改成「先确认好的，再送过去」。
+
+  探活原理：隧道活着时 /public/ping.png 返回真图片 → <img> onload；
+           隧道失效时 Cloudflare 返回 530 HTML   → <img> onerror。
+  双源容错：主源 Cloudflare Pages，挂了自己换本托管的 url.txt。
+*/
 var SOURCES = [
-  'https://workbench-redirect.pages.dev/url.txt?v=' + Date.now(),
-  'url.txt?v=' + Date.now()
+  'https://workbench-redirect.pages.dev/url.txt?v=',
+  'url.txt?v='
 ];
-function tryUrl(i) {
-  if (i >= SOURCES.length) {
-    document.querySelector('.loading span').textContent = '连接不上，请稍后刷新重试';
-    return;
-  }
-  fetch(SOURCES[i], { cache: 'no-store' })
+/* 两个校验图，任何一个能加载就算活着（防单文件缺失误判） */
+var PROBE_PATHS = ['/public/ping.png', '/public/logo-hermes.png'];
+var PROBE_TIMEOUT = 5000;   // 单张图超时(ms)
+var RETRY_MS = 15000;       // 自动重试间隔(ms)
+var OFFLINE_TEXT = '网络正在加载中，1分钟后再试';
+
+var tunnelUrl = '';
+var probeBusy = false;
+var retryTimer = null;
+
+function $(id) { return document.getElementById(id); }
+
+function setBusy(status, desc) {
+  $('loading').style.display = 'flex';
+  $('retry-btn').style.display = 'none';
+  $('status').textContent = status;
+  if (desc) $('desc').textContent = desc;
+}
+
+/* 隧道不通：留在本页给中文提示，绝不把学员丢到 530 错误页 */
+function setOffline() {
+  probeBusy = false;
+  $('loading').style.display = 'none';
+  $('desc').textContent = OFFLINE_TEXT;
+  $('status').textContent = '';
+  $('retry-btn').style.display = 'inline-block';
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(function () { start(true); }, RETRY_MS);
+}
+
+function showLink(u) {
+  var link = $('manual-link');
+  link.href = u;
+  link.style.display = 'inline-block';
+}
+
+/* 1) 读 url.txt（双源容错） */
+function fetchUrl(i) {
+  if (i >= SOURCES.length) { setOffline(); return; }
+  fetch(SOURCES[i] + Date.now(), { cache: 'no-store' })
     .then(function (r) { return r.text(); })
     .then(function (t) {
       var u = (t.match(/https:\/\/[^\s]+/) || [''])[0];
       if (u) {
-        var link = document.getElementById('manual-link');
-        link.href = u;
-        link.style.display = 'inline-block';
-        link.textContent = '进入我的 AI 工作台';
-        location.replace(u);
+        tunnelUrl = u;
+        showLink(u);
+        probeAll(u, 0);
       } else {
-        tryUrl(i + 1);
+        fetchUrl(i + 1);
       }
     })
-    .catch(function () { tryUrl(i + 1); });
+    .catch(function () { fetchUrl(i + 1); });
 }
-tryUrl(0);
+
+/* 2) 探活：两个校验图逐个试，全失败再整体重试一遍（防网络抖动误判） */
+function probeAll(u, attempt) {
+  if (probeBusy) return;
+  probeBusy = true;
+  var i = 0;
+  function next() {
+    if (i >= PROBE_PATHS.length) {
+      if (attempt === 0) {
+        setTimeout(function () { probeBusy = false; probeAll(u, 1); }, 2000);
+      } else {
+        setOffline();
+      }
+      return;
+    }
+    probeOne(u + PROBE_PATHS[i++], function (ok) {
+      if (ok) { location.replace(u); return; }
+      next();
+    });
+  }
+  next();
+}
+
+function probeOne(src, cb) {
+  var img = new Image();
+  var done = false;
+  var t = setTimeout(function () { finish(false); }, PROBE_TIMEOUT);
+  function finish(ok) {
+    if (done) return;
+    done = true;
+    clearTimeout(t);
+    img.onload = img.onerror = null;
+    if (!ok) probeBusy = false;
+    cb(ok);
+  }
+  img.onload = function () { finish(true); };
+  img.onerror = function () { finish(false); };
+  img.src = src + '?v=' + Date.now();
+}
+
+/* 3) 入口 */
+function start(isRetry) {
+  clearTimeout(retryTimer);
+  probeBusy = false;
+  if (isRetry) {
+    setBusy('正在重新连接小马…', '正在帮你重新进入工作台，请稍等…');
+    if (tunnelUrl) { probeAll(tunnelUrl, 0); return; }
+  } else {
+    setBusy('正在连接小马…', '正在帮你进入工作台，请稍等…');
+  }
+  fetchUrl(0);
+}
+
+$('retry-btn').addEventListener('click', function () { start(true); });
+start(false);
 </script>
 </body>
 </html>
