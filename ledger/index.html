@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>陪跑记录</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: radial-gradient(1200px 800px at 80% -10%, rgba(195,152,65,0.16), transparent 60%),
+                radial-gradient(1000px 700px at 10% 110%, rgba(195,152,65,0.08), transparent 60%),
+                linear-gradient(160deg, #101215 0%, #0B0C0E 100%);
+    color: #E9EAEC;
+    text-align: center;
+    padding: 24px;
+  }
+  .card {
+    max-width: 420px; width: 100%;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 20px;
+    padding: 40px 30px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+  .logo {
+    width: 64px; height: 64px; border-radius: 50%;
+    margin: 0 auto 18px;
+    display: flex; align-items: center; justify-content: center; font-size: 30px;
+    background: linear-gradient(135deg, rgba(195,152,65,0.28), rgba(195,152,65,0.10));
+    border: 1px solid rgba(195,152,65,0.42);
+  }
+  h1 { font-size: 21px; font-weight: 700; margin-bottom: 8px; color: #fff; }
+  p.desc { font-size: 13.5px; color: rgba(200,206,216,0.72); margin-bottom: 24px; line-height: 1.6; }
+  .loading { display: flex; align-items: center; justify-content: center; gap: 10px; color: #C39841; font-size: 13.5px; margin-bottom: 16px; }
+  .spinner {
+    width: 15px; height: 15px; border: 2px solid rgba(195,152,65,0.22);
+    border-top-color: #C39841; border-radius: 50%; animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  button.btn {
+    margin-top: 10px; padding: 10px 26px; border-radius: 999px; border: 0; cursor: pointer;
+    font-family: inherit; font-weight: 700; font-size: 13.5px;
+    background: linear-gradient(135deg, #D8B369, #C39841); color: #17140D;
+  }
+  .tip { margin-top: 20px; font-size: 11.5px; color: rgba(170,184,220,0.45); }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">📒</div>
+  <h1>陪跑记录</h1>
+  <p class="desc" id="desc">正在打开你的陪跑记录，请稍等…</p>
+  <div class="loading" id="loading"><div class="spinner"></div><span id="status">正在连接…</span></div>
+  <button class="btn" id="retry-btn" style="display:none">再试一次</button>
+  <p class="tip">这一页只记陪跑进度，跟工作台是两回事</p>
+</div>
+<script>
+/*
+  陪跑记录独立入口（2026-11-03）
+  与工作台入口分开：这里只跳「陪跑记录」，不碰工作台。
+  原理同工作台入口：读 url.txt 拿当前隧道地址 → 先探活 → 通了才跳。
+*/
+var SOURCES = [
+  'https://workbench-redirect.pages.dev/url.txt?v=',
+  '../url.txt?v='
+];
+var PROBE_PATHS = ['/public/ping.png', '/public/logo-hermes.png'];
+var PROBE_TIMEOUT = 5000;
+var RETRY_MS = 15000;
+var OFFLINE_TEXT = '网络正在加载中，1分钟后再试';
+
+var tunnelUrl = '', probeBusy = false, retryTimer = null;
+function $(id){ return document.getElementById(id); }
+
+function setBusy(t){ $('loading').style.display='flex'; $('retry-btn').style.display='none'; $('status').textContent=t; }
+function setOffline(){
+  probeBusy = false;
+  $('loading').style.display = 'none';
+  $('desc').textContent = OFFLINE_TEXT;
+  $('retry-btn').style.display = 'inline-block';
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(function(){ start(true); }, RETRY_MS);
+}
+function fetchUrl(i){
+  if (i >= SOURCES.length) { setOffline(); return; }
+  fetch(SOURCES[i] + Date.now(), { cache:'no-store' })
+    .then(function(r){ return r.text(); })
+    .then(function(t){
+      var u = (t.match(/https:\/\/[^\s]+/) || [''])[0];
+      if (u) { tunnelUrl = u; probeAll(u, 0); } else { fetchUrl(i + 1); }
+    })
+    .catch(function(){ fetchUrl(i + 1); });
+}
+function probeAll(u, attempt){
+  if (probeBusy) return;
+  probeBusy = true;
+  var i = 0;
+  function next(){
+    if (i >= PROBE_PATHS.length){
+      if (attempt === 0) { setTimeout(function(){ probeBusy = false; probeAll(u, 1); }, 2000); }
+      else { setOffline(); }
+      return;
+    }
+    probeOne(u + PROBE_PATHS[i++], function(ok){
+      if (ok) { location.replace(u + '/ledger'); return; }
+      next();
+    });
+  }
+  next();
+}
+function probeOne(src, cb){
+  var img = new Image(), done = false;
+  var t = setTimeout(function(){ finish(false); }, PROBE_TIMEOUT);
+  function finish(ok){
+    if (done) return;
+    done = true; clearTimeout(t);
+    img.onload = img.onerror = null;
+    if (!ok) probeBusy = false;
+    cb(ok);
+  }
+  img.onload = function(){ finish(true); };
+  img.onerror = function(){ finish(false); };
+  img.src = src + '?v=' + Date.now();
+}
+function start(isRetry){
+  clearTimeout(retryTimer);
+  probeBusy = false;
+  setBusy(isRetry ? '正在重新连接…' : '正在连接…');
+  if (isRetry && tunnelUrl) { probeAll(tunnelUrl, 0); return; }
+  fetchUrl(0);
+}
+$('retry-btn').addEventListener('click', function(){ start(true); });
+start(false);
+</script>
+</body>
+</html>
