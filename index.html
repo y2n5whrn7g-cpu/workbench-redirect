@@ -79,6 +79,7 @@
   <div class="loading" id="loading"><div class="spinner"></div><span id="status">正在连接小马…</span></div>
   <button class="btn" id="retry-btn" style="display:none">再试一次</button>
   <a class="btn ghost" id="manual-link" href="#" style="display:none">强制打开原地址（可能仍打不开）</a>
+  <a class="btn ghost" id="ledger-link" href="#" style="display:none;margin-left:8px">陪跑记录 →</a>
   <p class="tip">如果打不开，联系老师</p>
 </div>
 <script>
@@ -109,6 +110,14 @@ var OFFLINE_TEXT = '网络正在加载中，1分钟后再试';
 var tunnelUrl = '';
 var probeBusy = false;
 var retryTimer = null;
+/* 陪跑记录入口（2026-11-03）：
+   默认仍是无感进工作台；带 ?to=ledger 直接进陪跑台账；
+   探活成功后留 1.5 秒，让页面上的「陪跑记录」链接能被点到。 */
+var WANT_LEDGER = /(?:^|[?&])to=ledger(?:&|$)/.test(location.search);
+var JUMP_DELAY = 1500;
+var cancelled = false;
+
+function destUrl(u) { return WANT_LEDGER ? u + '/ledger' : u; }
 
 function $(id) { return document.getElementById(id); }
 
@@ -137,7 +146,15 @@ function showLink(u) {
   var link = $('manual-link');
   link.href = u;
   link.style.display = 'inline-block';
+  var lg = $('ledger-link');
+  lg.href = u + '/ledger';
+  lg.style.display = 'inline-block';
 }
+
+/* 点「陪跑记录」= 手动取消自动进工作台 */
+$('ledger-link').addEventListener('click', function () {
+  cancelled = true;
+});
 
 /* 1) 读 url.txt（双源容错） */
 function fetchUrl(i) {
@@ -171,7 +188,13 @@ function probeAll(u, attempt) {
       return;
     }
     probeOne(u + PROBE_PATHS[i++], function (ok) {
-      if (ok) { location.replace(u); return; }
+      if (ok) {
+        showLink(u);   /* 先露出两个入口，1.5 秒后再自动走，期间点「陪跑记录」就不走 */
+        setTimeout(function () {
+          if (!cancelled) location.replace(destUrl(u));
+        }, JUMP_DELAY);
+        return;
+      }
       next();
     });
   }
